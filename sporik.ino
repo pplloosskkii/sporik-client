@@ -13,7 +13,7 @@
 byte mac[] = {  0xDF, 0xED, 0xBA, 0xFE, 0xFE, 0xAB };
 //IPAddress ip(172, 16, 0, 130); 
 IPAddress ip(172, 16, 0, 129);
-IPAddress server(172, 16, 0, 123);
+IPAddress server(192, 168, 1, 99);
 const int port = 1883;
 //const char* myAddress = "1f0";
 const char* myAddress = "0f0";
