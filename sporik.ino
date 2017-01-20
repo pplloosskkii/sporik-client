@@ -1,5 +1,3 @@
-
-
 /*
  
 */
@@ -9,14 +7,24 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
-//byte mac[] = {  0xDF, 0xED, 0xBB, 0xFE, 0xFE, 0xAD };
-byte mac[] = {  0xDF, 0xED, 0xBA, 0xFE, 0xFE, 0xAB };
-//IPAddress ip(172, 16, 0, 130); 
+
+// VARIANT 0
+byte mac[] = { 0xb6,0xaf,0x98,0xda,0x47,0x30 };
 IPAddress ip(172, 16, 0, 129);
+const char* myAddress = "sporik0";
+
+// VARIANT 1
+//byte mac[] = {  0x8a, 0xab, 0xe4, 0x34, 0x25, 0x56 };
+//IPAddress ip(172, 16, 0, 130); 
+//const char* myAddress = "sporik1";
+
+IPAddress myDns(172, 16, 0, 4);
+IPAddress gateway(172, 16, 0, 4);
+IPAddress subnet(255, 255, 255, 0);
 IPAddress server(192, 168, 1, 99);
 const int port = 1883;
-//const char* myAddress = "1f0";
-const char* myAddress = "0f0";
+
+
 
 bool isRegistered = false;
 bool relayState = false;
@@ -91,7 +99,7 @@ void onToggle(JsonObject& json) {
     regulationValue = 0;
     digitalWrite(outputTogglePin, (relayState ? HIGH : LOW));
     
-    char pub[40];
+    char pub[60];
     sprintf(pub, "{ \"address\":\"%s\", \"state\":\"%i\"}", myAddress, relayState);
     client.publish("sporik/relay-state", pub);
   } else {
@@ -112,7 +120,7 @@ void onRegulation(JsonObject& json) {
     Serial.println(regulationValue);
 
     char pub[40];
-    sprintf(pub, "{ \"address\":\"%s\", \"value\":\"%l\"}", myAddress, regulationValue);
+    sprintf(pub, "{ \"address\":\"%s\", \"value\":\"%i\"}", myAddress, regulationValue);
     client.publish("sporik/triac-value", pub);
   } else {
     Serial.println(F("wrong reply on toggle:"));
@@ -126,14 +134,15 @@ void reconnect() {
   while (!client.connected()) {
     Serial.print(F("Attempting MQTT connection..."));
     
-    if (client.connect("sporikClient")) {
+    if (client.connect(myAddress)) {
       Serial.println("connected");
 
-      char pub[20] = "";
+      char pub[30] = "";
       sprintf(pub, "{ \"address\":\"%s\" }", myAddress);
       client.publish("sporik/connect", pub);
       
       client.subscribe("sporik/register");
+      delay(1000);
     } else {
       Serial.print(F("failed, rc="));
       Serial.print(client.state());
@@ -163,20 +172,40 @@ void setup()
   client.setServer(server, port);
   client.setCallback(callback);
 
+  Serial.println("INIT NET");
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("Failed to configure Ethernet using DHCP");
+    // initialize the Ethernet device not using DHCP:
+    Ethernet.begin(mac, ip, myDns, gateway, subnet);
+
+  }
+  // Allow the hardware to sort itself out
+
+  Serial.print("My IP address: ");
+  ip = Ethernet.localIP();
+  for (byte thisByte = 0; thisByte < 4; thisByte++) {
+    // print the value of each byte of the IP address:
+    Serial.print(ip[thisByte], DEC);
+    Serial.print(".");
+  }
+  Serial.println();
+  
+  delay(1500);
+
+
   pinMode(inputZeroCrossPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(inputZeroCrossPin), setZeroCrossTime, RISING);
   pinMode(outputTogglePin, OUTPUT);
   digitalWrite(outputTogglePin, (relayState ? HIGH : LOW));
 
-  Ethernet.begin(mac, ip);
-  delay(1500);
+
 }
 
 
 void sendMeasurement() {
   Serial.println(F("doing measurement"));
-  char pub[70];
-  sprintf(pub, "{ \"address\":\"%s\", \"value\":%i, \"s\":%i, \"r\":%l }", myAddress, measurementValue, relayState, regulationValue);
+  char pub[128];
+  sprintf(pub, "{\"address\":\"%s\",\"value\":%i,\"s\":%i,\"r\":%i}", myAddress, measurementValue, relayState, regulationValue);
   client.publish("sporik/measurement", pub);
 }
 
