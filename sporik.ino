@@ -27,7 +27,7 @@ const int port = 1883;
 
 
 bool isRegistered = false;
-bool relayState = false;
+
 long regulationValue = 0;
 bool regulationInProgress = false;
 int measurementValue = 0;
@@ -52,8 +52,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if (!strcmp(topic,"sporik/register")) {
     onRegistered(json);
-  } else if (!strcmp(topic,"sporik/toggle")) {
-    onToggle(json);
   } else if (!strcmp(topic,"sporik/regulate")) {
     onRegulation(json);
   } else {
@@ -78,7 +76,6 @@ void onRegistered(JsonObject& json) {
   Serial.println("onRegistered()");
   if (!strcmp(json["address"], myAddress)) {
     isRegistered = true;
-    client.subscribe("sporik/toggle");
     client.subscribe("sporik/regulate");
   } else {
     Serial.println(F("wrong reply on register:"));
@@ -87,45 +84,47 @@ void onRegistered(JsonObject& json) {
 }
 
 
-/* on toggle:
- * - if myAddress is same as in reply and device is registered
- * - toggle state 
- */
-void onToggle(JsonObject& json) {
-  Serial.println("onToggle()");
-  if (!strcmp(json["address"], myAddress) && isRegistered) {
-    Serial.println("toggling");
-    relayState = !relayState;
-    regulationValue = 0;
-    digitalWrite(outputTogglePin, (relayState ? HIGH : LOW));
-    
-    char pub[60];
-    sprintf(pub, "{ \"address\":\"%s\", \"state\":\"%i\"}", myAddress, relayState);
-    client.publish("sporik/relay-state", pub);
-  } else {
-    Serial.println(F("wrong reply on toggle:"));
-    json.printTo(Serial);
-  }
-}
-
 /* on regulation:
  * - if myAddress is same as in reply and device is registered
  * - set level of regulation
  */
 void onRegulation(JsonObject& json) {
   Serial.println("onRegulation()");
-  if (!strcmp(json["address"], myAddress) && isRegistered) {
-    regulationValue = json["value"];
-
-    Serial.println(regulationValue);
-
+  if (!strcmp(json["address"], myAddress) && isRegistered && (int)json["value"] >= 0 && (int)json["value"] <= 100) {
+    regulationValue = parsePercentToTime((int)json["value"]);
+    
     char pub[40];
-    sprintf(pub, "{ \"address\":\"%s\", \"value\":\"%i\"}", myAddress, regulationValue);
+    sprintf(pub, "{ \"address\":\"%s\", \"value\":\"%i\"}", myAddress, parseTimeToPercent(regulationValue));
     client.publish("sporik/triac-value", pub);
   } else {
-    Serial.println(F("wrong reply on toggle:"));
+    Serial.println(F("wrong reply on regulate:"));
     json.printTo(Serial);
   }
+}
+
+long parsePercentToTime(int value) {
+  long sum = 0;
+  int maxSin = 11458;
+  for (float i = 0; i <= 180; i++) {
+    long x = round(sin(i * PI / 180) * 100);
+    sum = sum + x;
+    long m = round((100 * sum) / maxSin);
+    if (m >= value) {
+      return round((float)(i / 180) * 10000);
+    }
+  }
+}
+
+int parseTimeToPercent(long value) {
+  long sum = 0;
+  int maxSin = 11458;
+  float val = (float)value;
+  float xx = round((val / 10000) * 180);
+  for (float i = 0; i <= xx; i++) {
+    long x = round(sin(i * PI / 180) * 100);
+    sum = sum + x;
+  }
+  return round((float)((100 * sum) / maxSin));
 }
 
 
@@ -155,13 +154,22 @@ void reconnect() {
 
 
 void setZeroCrossTime() {
-  if (!regulationInProgress && regulationValue > 0 && regulationValue < 8500) {
-    regulationInProgress = true;
-        // 0 - 10000 micros
-    delayMicroseconds(regulationValue);
-    digitalWrite(outputTogglePin, HIGH);
-    delayMicroseconds(500);
-    digitalWrite(outputTogglePin, LOW);
+  if (!regulationInProgress) {
+    long regVal = 10000 - regulationValue;
+    
+    if (regVal > 100 && regVal < 8500) {
+      regulationInProgress = true;
+      
+      // 0 - 10000 micros
+      delayMicroseconds(regVal);
+      digitalWrite(outputTogglePin, HIGH);
+      delayMicroseconds(500);
+      digitalWrite(outputTogglePin, LOW);
+    } else if (regVal < 100) {
+      digitalWrite(outputTogglePin, HIGH);
+    } else if (regVal >= 8500) {
+      digitalWrite(outputTogglePin, LOW);
+    }
   }
 }
 
@@ -196,7 +204,7 @@ void setup()
   pinMode(inputZeroCrossPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(inputZeroCrossPin), setZeroCrossTime, RISING);
   pinMode(outputTogglePin, OUTPUT);
-  digitalWrite(outputTogglePin, (relayState ? HIGH : LOW));
+  digitalWrite(outputTogglePin, LOW);
 
 
 }
@@ -205,7 +213,7 @@ void setup()
 void sendMeasurement() {
   Serial.println(F("doing measurement"));
   char pub[128];
-  sprintf(pub, "{\"address\":\"%s\",\"value\":%i,\"s\":%i,\"r\":%i}", myAddress, measurementValue, relayState, regulationValue);
+  sprintf(pub, "{\"address\":\"%s\",\"value\":%i,\"r\":%i}", myAddress, measurementValue, parseTimeToPercent(regulationValue));
   client.publish("sporik/measurement", pub);
 }
 
