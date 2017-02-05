@@ -29,6 +29,8 @@ const int port = 1883;
 bool isRegistered = false;
 
 long regulationValue = 0;
+long elapsedTime = 0;
+
 bool regulationInProgress = false;
 int measurementValue = 0;
 
@@ -92,7 +94,8 @@ void onRegulation(JsonObject& json) {
   Serial.println("onRegulation()");
   if (!strcmp(json["address"], myAddress) && isRegistered && (int)json["value"] >= 0 && (int)json["value"] <= 100) {
     regulationValue = parsePercentToTime((int)json["value"]);
-    
+    Serial.print(F("Regulating to "));
+    Serial.println(regulationValue);
     char pub[40];
     sprintf(pub, "{ \"address\":\"%s\", \"value\":\"%i\"}", myAddress, parseTimeToPercent(regulationValue));
     client.publish("sporik/triac-value", pub);
@@ -153,25 +156,6 @@ void reconnect() {
 }
 
 
-void setZeroCrossTime() {
-  if (!regulationInProgress) {
-    long regVal = 10000 - regulationValue;
-    
-    if (regVal > 100 && regVal < 8500) {
-      regulationInProgress = true;
-      
-      // 0 - 10000 micros
-      delayMicroseconds(regVal);
-      digitalWrite(outputTogglePin, HIGH);
-      delayMicroseconds(500);
-      digitalWrite(outputTogglePin, LOW);
-    } else if (regVal < 100) {
-      digitalWrite(outputTogglePin, HIGH);
-    } else if (regVal >= 8500) {
-      digitalWrite(outputTogglePin, LOW);
-    }
-  }
-}
 
 void setup()
 {
@@ -197,17 +181,52 @@ void setup()
     Serial.print(".");
   }
   Serial.println();
-  
-  delay(1500);
 
+  Serial.println("Init interrupt");
 
   pinMode(inputZeroCrossPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(inputZeroCrossPin), setZeroCrossTime, RISING);
   pinMode(outputTogglePin, OUTPUT);
   digitalWrite(outputTogglePin, LOW);
 
+  delay(300);
 
+
+  Serial.println("Init timer");
+  noInterrupts();           // disable all interrupts
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1  = 0;
+  OCR1A = (20000 / 200) - 1;   // toggle after counting to 
+  TCCR1A |= (1 << COM1A0);   // Toggle OC1A on Compare Match.
+  TCCR1B |= (1 << WGM12);    // CTC mode
+  TCCR1B |= (1 << CS11);     // clock on, pre-scaler
+  TIMSK1 |= (1 << OCIE1A);
+  interrupts();             // enable all interrupts
+   
+  delay(300);
 }
+
+
+void setZeroCrossTime() {
+  elapsedTime = 0;
+  if (regulationValue < 9900) digitalWrite(outputTogglePin, LOW); 
+}
+
+
+ISR(TIMER1_COMPA_vect)
+{
+  // increment elapsedTime (by 50us) until reach regulation value
+  if (regulationValue < 100) return;
+  
+  elapsedTime = elapsedTime + 50;
+  if (elapsedTime >= (10000 - regulationValue)) {
+    digitalWrite(outputTogglePin, HIGH);
+    return;
+  }
+}
+// 10000 - 9944 = 56, 
+
 
 
 void sendMeasurement() {
@@ -223,11 +242,7 @@ unsigned int maxLoop = 10000;
 
 void loop()
 {
-  if (regulationInProgress) {
-    regulationInProgress = false;
-    return;
-  }
-  
+
   if (!client.connected()) {
     reconnect();
   }
